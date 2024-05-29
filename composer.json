@@ -1,0 +1,10 @@
+{
+    "require": {
+        "directorytree/ldaprecord": "^3.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ldap\\": "includes/"
+        }
+    }
+}
