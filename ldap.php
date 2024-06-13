@@ -18,24 +18,19 @@ else {
 	die("Can't load composer.");
 }
 
-use LdapRecord\Container;
-use LdapRecord\Connection;
-use LdapRecord\Models\ActiveDirectory\User;
-use LdapRecord\Models\Entry;
+use Adldap\Adldap;
 
 new Ldap\AdminPage();
 
 //DESCOMENTAR
 //Redirect users to login on load, excluding uploads folder
-// add_action( 'init', function() {
-//     if (strpos($_SERVER['REQUEST_URI'], 'uploads') == false) {
-//         if (!is_user_logged_in()) {
-//             nocache_headers();
-//             wp_redirect('/login/?access=external');
-// 			exit;
-//         }
-//     }
-// });
+add_action( 'init', function() {
+    global $pagenow;
+    if (strpos($_SERVER['REQUEST_URI'], 'uploads') == false) {
+        if(!is_user_logged_in() && $pagenow != 'wp-login.php')
+            auth_redirect();
+    }
+});
 
 add_filter('authenticate', function ($user) {
     if (isset($_POST['log']) && $_POST['pwd']) {
@@ -46,15 +41,7 @@ add_filter('authenticate', function ($user) {
             $ldap->configs['gps-pamcary']['admin_username'] = "gps-pamcary\\" . $_POST["log"];
             $ldap->configs['gps-pamcary']['admin_password'] = $_POST["pwd"];
             
-            //$ad = new Adldap\Adldap($ldap['gps-pamcary']);
-            $connection = new Connection($ldap->configs['gps-pamcary']);
-            
-            // Add the connection into the container:
-            Container::addConnection($connection);
-            $objects = Entry::get();
-            var_dump($objects);
-            exit;
-
+            $ad = new Adldap\Adldap($ldap->configs['gps-pamcary']);
             if ($ad->connect()) {
                 $active = get_user_meta($user->ID, 'lus_active', true);
                 if ($active != '1') {
@@ -65,7 +52,7 @@ add_filter('authenticate', function ($user) {
         }
     }
 
-    if ($user && wp_check_password($pass, $user->data->user_pass, $user->ID)) {
+    if ($user && wp_check_password($_POST['pwd'], $user->data->user_pass, $user->ID)) {
         return $user;
     }
 
@@ -73,40 +60,28 @@ add_filter('authenticate', function ($user) {
 });
 
 Ldap\PostRequest::register('user_ldap', function () {
-    $email = isset($_POST['email']) && !empty($_POST['email']) ? strtolower($_POST['email']) : false;
-
     if (!isset($_POST['email']) || empty($_POST['email'])) {
         echo 'E-mail obrigatório.';
         exit;
     }
 
     $ldap = new Ldap\Config();
-    $connection = new Connection($ldap->configs['gps-pamcary']);
-    
-    // Add the connection into the container:
-    Container::addConnection($connection);
-    $objects = Entry::get();
-
-    //$ad = new Adldap\Adldap($ldap['gps-pamcary']);
-    //$ad->connect();
+    $ad = new Adldap($ldap->configs['gps-pamcary']);
+    $ad->connect();
 
     $groups = $ldap->configs['gps-pamcary']['groups'];
 
     $userArray = [];
 
     foreach ($groups as $group) {
-        $group = Group::find($group);
-        $members = $group->members()->get();
-
-        var_dump($members);
-        exit;
-
-        //$users = $ad->folder()->listing($group);
-        $userArray = array_merge($userArray, $members);
+        $users = $ad->folder()->listing($group);
+        $userArray = array_merge($userArray, $users);
     }
 
     $users = $userArray;
     $userKey = null;
+
+    $email = isset($_POST['email']) && !empty($_POST['email']) ? strtolower($_POST['email']) : false;
 
     foreach ($users as $key => $val) {
         if ($val['mail'] === $email) {
@@ -261,51 +236,21 @@ function updateUserMetaLdap($userObj, $userLdap, $active = 1)
 Ldap\PostRequest::register('users_ldap', function () {
     #Verifica se o retorno é por URL ou Form
     $r_empresa = isset($_GET['empresa']) ? $_GET['empresa'] : $_POST['empresa'];
+    
     $debug = true;
-
-    echo '<pre>';
-    
     $ldap = new Ldap\Config();
-    // $ad = new Adldap($ldap[$r_empresa]);
-    // $ad->connect();
-
-    var_dump('----- Empresa -------');
-    var_dump($ldap->configs[$r_empresa]);
-    
-    $connection = new Connection($ldap->configs[$r_empresa]);
-    //Container::addConnection($connection);
-
-    var_dump('----- Empresa -------');
+    $ad = new Adldap($ldap->configs[$r_empresa]);
+    $ad->connect();
 
     $especiais_users = [];
     if (isset($ldap->configs[$r_empresa]['groups'])) {
         foreach ($ldap->configs[$r_empresa]['groups'] as $group) {
-            //$current_users = $ad->folder()->listing($group);
-            //$especiais_users = array_merge($especiais_users, $current_users);
-
-            $group = Group::find($group);
-            $members = $group->members()->get();
-            var_dump($members);
-            exit;
-
-            $especiais_users = array_merge($especiais_users, $members);
+            $current_users = $ad->folder()->listing($group);
+            $especiais_users = array_merge($especiais_users, $current_users);
         }
     }
 
-    var_dump('----- Empresa -------');
-
-    $query = $connection->query();
-
-    var_dump('----- Query -------');
-    $entries = $query->whereHas('cn')->limit(200)->get();
-
-
-    var_dump('----- ENTRIES -------');
-
-    var_dump('----- Users -------');
-    var_dump($users);
-    exit;
-
+    $users = $ad->user()->all();
     $users = array_merge($users, $especiais_users);
     if ($debug) {
         echo '<h1>' . $r_empresa . '</h1>';
@@ -332,124 +277,127 @@ Ldap\PostRequest::register('users_ldap', function () {
     global $wpdb;
 
     foreach ($users as $user) {
-        $name = $user['givenname'];
-        $surname = $user['sn'];
-        #$email = isset($user['mail']) && !empty($user['mail']) ? $user['mail'] : $user['userprincipalname'];
-        $email = isset($user['mail']) && !empty($user['mail']) ? strtolower($user['mail']) : false;
-        #echo $email;
-        if ($r_empresa == 'gps-pamcary') {
-            $username = $user['samaccountname'];
-        } else {
-            $username = $user['samaccountname'] . '.' . $r_empresa;
-        }
-
-        if (!empty($email) && !empty($username)) {
-            #Converte campos de nome e username
-            if (function_exists('mb_convert_case')) {
-                $name = mb_convert_case(strtolower($name), MB_CASE_TITLE, 'UTF-8');
-                $surname = mb_convert_case(strtolower($surname), MB_CASE_TITLE, 'UTF-8');
+        if(isset($user['samaccountname'])){
+            $name = isset($user['givenname']) ? $user['givenname'] : '';;
+            $surname = isset($user['sn']) ? $user['sn'] : '';
+            $email = isset($user['mail']) && !empty($user['mail']) ? strtolower($user['mail']) : false;
+            #echo $email;
+            if ($r_empresa == 'gps-pamcary') {
+                $username = $user['samaccountname'];
+            } else {
+                $username = $user['samaccountname'] . '.' . $r_empresa;
             }
 
-            #Verifica usuário por email - alterado para buscar pelo usuario
-            $user_obj = get_user_by('login', $username);
+            if (!empty($email) && !empty($username)) {
+                #Converte campos de nome e username
+                if (function_exists('mb_convert_case')) {
+                    $name = mb_convert_case(strtolower($name), MB_CASE_TITLE, 'UTF-8');
+                    $surname = mb_convert_case(strtolower($surname), MB_CASE_TITLE, 'UTF-8');
+                }
 
-            #Verifica se o login não existe no WP
-            if ($user_obj) {
-                #Atualiza o email caso o login exista
-                $user_id = wp_update_user(
-                    array(
-                        'ID' => $user_obj->ID,
-                        'user_email' => $email,
-                    )
-                );
+                #Verifica usuário por email - alterado para buscar pelo usuario
+                $user_obj = get_user_by('login', $username);
 
-                #Atualiza o usur_login do usuário
-                if ($user_obj->user_login != $user['samaccountname']) {
-                    #Verifica se o nome de usuário já existe
-                    #Se existir / Ele irá mudar o nome do outro, para o usuário ficar o correto
-                    $user_existente = get_user_by('login', $user_obj->user_login);
-                    if ($user_existente) {
+                #Verifica se o login não existe no WP
+                if ($user_obj) {
+                    #Atualiza o email caso o login exista
+                    $user_id = wp_update_user(
+                        array(
+                            'ID' => $user_obj->ID,
+                            'user_email' => $email,
+                        )
+                    );
+
+                    #Atualiza o usur_login do usuário
+                    if ($user_obj->user_login != $user['samaccountname']) {
+                        #Verifica se o nome de usuário já existe
+                        #Se existir / Ele irá mudar o nome do outro, para o usuário ficar o correto
+                        $user_existente = get_user_by('login', $user_obj->user_login);
+                        if ($user_existente) {
+                            $wpdb->update(
+                                $wpdb->users,
+                                array(
+                                    'user_login' => $user_existente->user_login . '-outro'
+                                ),
+                                array('ID' => $user_existente->ID)
+                            );
+                        }
+                        #Atualiza o user_login do usuário correto
                         $wpdb->update(
                             $wpdb->users,
                             array(
-                                'user_login' => $user_existente->user_login . '-outro'
+                                'user_login' => $user['samaccountname']
                             ),
-                            array('ID' => $user_existente->ID)
+                            array('ID' => $user_id)
                         );
+                        #echo 'User errado';
+                        #echo '<pre class="pre">';var_dump($user_obj->user_login, $user['samaccountname'], $email, $user_obj->ID);echo '</pre>';
+                        #echo '<pre class="pre">';var_dump($user_obj);echo '</pre>';
                     }
-                    #Atualiza o user_login do usuário correto
-                    $wpdb->update(
-                        $wpdb->users,
-                        array(
-                            'user_login' => $user['samaccountname']
-                        ),
-                        array('ID' => $user_id)
-                    );
-                    #echo 'User errado';
-                    #echo '<pre class="pre">';var_dump($user_obj->user_login, $user['samaccountname'], $email, $user_obj->ID);echo '</pre>';
-                    #echo '<pre class="pre">';var_dump($user_obj);echo '</pre>';
+
+                    #Verifica se deu erro
+                    if (is_wp_error($user_id)) {
+                        $erros++;
+                    } else {
+                        $atualizados++;
+                    }
+                } else {
+                    #Cria o usuário caso o login não exista
+                    $user_id = wp_insert_user([
+                        'user_pass' => wp_generate_password(12, true, true),
+                        'user_login' => $username,
+                        'user_nicename' => $email,
+                        'user_email' => $email,
+                        'display_name' => $name,
+                        'nickname' => $name,
+                        'first_name' => $name,
+                        'last_name' => $surname,
+                        'user_registered' => date("Y-m-d H:i:s")
+                    ]);
+                    #Caso de algum erro de adiionar o usuário
+                    if (is_wp_error($user_id)) {
+                        $erros++;
+                    } else {
+                        $criados++;
+                    }
                 }
 
-                #Verifica se deu erro
-                if (is_wp_error($user_id)) {
-                    $erros++;
-                } else {
-                    $atualizados++;
+                $active = 1;
+                foreach ($user['dn_array'] as $dn) {
+                    if ($dn == 'BLOQUEADOS') {
+                        $active = 0;
+                    }
+                    else
+                    if ($dn == 'EXTERNOS') {
+                        $active = 0;
+                    }
                 }
+
+                #Caso o campo de ramal esteja vazio, ele desativa o usuário
+                if (!isset($user['pager']) || empty($user['pager']) || $user['useraccountcontrol'] == "513" || $user['useraccountcontrol'] == "514") {
+                    $active = 0;
+                }
+                update_user_meta($user_id, 'lus_active',           $active);
+                update_user_meta($user_id, 'lus_name',             isset($user['cn'])              ? $user['cn'] : '');
+                update_user_meta($user_id, 'lus_telephonenumber',  isset($user['telephonenumber']) ? $user['telephonenumber'] : '');
+                update_user_meta($user_id, 'lus_pager',            isset($user['pager'])           ? $user['pager'] : '');
+                update_user_meta($user_id, 'lus_st',               isset($user['st'])              ? $user['st'] : '');
+                update_user_meta($user_id, 'lus_department',       isset($user['department'])      ? $user['department'] : '');
+                update_user_meta($user_id, 'lus_department_floor', '');
+                update_user_meta($user_id, 'lus_streetaddress',    isset($user['streetaddress'])   ? $user['streetaddress'] : '');
+                update_user_meta($user_id, 'lus_houseidentifier',  isset($user['houseidentifier']) ? $user['houseidentifier'] : '');
+                update_user_meta($user_id, 'lus_l',                isset($user['l'])               ? $user['l'] : '');
+                update_user_meta($user_id, 'lus_title',            isset($user['title'])           ? $user['title'] : '');
+                update_user_meta($user_id, 'lus_employeenumber',   isset($user['employeenumber'])  ? $user['employeenumber'] : '');
+                update_user_meta($user_id, 'lus_manager',          isset($user['manager'])         ? $user['manager'] : '');
+                update_user_meta($user_id, 'company',              $r_empresa);
+                update_user_meta($user_id, 'ldap_login', 'true');
             } else {
-                #Cria o usuário caso o login não exista
-                $user_id = wp_insert_user([
-                    'user_pass' => wp_generate_password(12, true, true),
-                    'user_login' => $username,
-                    'user_nicename' => $email,
-                    'user_email' => $email,
-                    'display_name' => $name,
-                    'nickname' => $name,
-                    'first_name' => $name,
-                    'last_name' => $surname,
-                    'user_registered' => date("Y-m-d H:i:s")
-                ]);
-                #Caso de algum erro de adiionar o usuário
-                if (is_wp_error($user_id)) {
-                    $erros++;
-                } else {
-                    $criados++;
-                }
+                $msg = 'Usuário: <b>' . $user['samaccountname'] . '</b> sem email cadastrado no AD.';
+                #echo '<pre class="pre">'.$msg.'</pre>';
+                $erros++;
             }
-
-            $active = 1;
-            foreach ($user['dn_array'] as $dn) {
-                if ($dn == 'BLOQUEADOS') {
-                    $active = 0;
-                }
-                else
-                if ($dn == 'EXTERNOS') {
-                    $active = 0;
-                }
-            }
-
-            #Caso o campo de ramal esteja vazio, ele desativa o usuário
-            if (!isset($user['pager']) || empty($user['pager']) || $user['useraccountcontrol'] == "513" || $user['useraccountcontrol'] == "514") {
-                $active = 0;
-            }
-            update_user_meta($user_id, 'lus_active',           $active);
-            update_user_meta($user_id, 'lus_name',             isset($user['cn'])              ? $user['cn'] : '');
-            update_user_meta($user_id, 'lus_telephonenumber',  isset($user['telephonenumber']) ? $user['telephonenumber'] : '');
-            update_user_meta($user_id, 'lus_pager',            isset($user['pager'])           ? $user['pager'] : '');
-            update_user_meta($user_id, 'lus_st',               isset($user['st'])              ? $user['st'] : '');
-            update_user_meta($user_id, 'lus_department',       isset($user['department'])      ? $user['department'] : '');
-            update_user_meta($user_id, 'lus_department_floor', '');
-            update_user_meta($user_id, 'lus_streetaddress',    isset($user['streetaddress'])   ? $user['streetaddress'] : '');
-            update_user_meta($user_id, 'lus_houseidentifier',  isset($user['houseidentifier']) ? $user['houseidentifier'] : '');
-            update_user_meta($user_id, 'lus_l',                isset($user['l'])               ? $user['l'] : '');
-            update_user_meta($user_id, 'lus_title',            isset($user['title'])           ? $user['title'] : '');
-            update_user_meta($user_id, 'lus_employeenumber',   isset($user['employeenumber'])  ? $user['employeenumber'] : '');
-            update_user_meta($user_id, 'lus_manager',          isset($user['manager'])         ? $user['manager'] : '');
-            update_user_meta($user_id, 'company',              $r_empresa);
-            update_user_meta($user_id, 'ldap_login', 'true');
         } else {
-            $msg = 'Usuário: <b>' . $user['samaccountname'] . '</b> sem email cadastrado no AD.';
-            #echo '<pre class="pre">'.$msg.'</pre>';
             $erros++;
         }
     }
@@ -463,7 +411,6 @@ Ldap\PostRequest::register('users_ldap', function () {
     if ($debug) {
         exit;
     }
-    if (wp_redirect($_SERVER['HTTP_REFERER'])) {
-        exit;
-    }
+
+    wp_redirect($_SERVER['HTTP_REFERER']);
 }, []);

@@ -1,6 +1,6 @@
 {
     "require": {
-        "directorytree/ldaprecord": "^3.6"
+        "adldap/adldap": "5.0.0.x-dev"
     },
     "autoload": {
         "psr-4": {
